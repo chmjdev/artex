@@ -67,10 +67,12 @@ def postgres_tools():
     return bindir
 
 def main():
+    report["phase"] = "credential_delivery"
     api_key = os.environ.get("ARTEX_ZEUS_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("Artex's own scoped Zeus credential is not delivered")
     bindir = postgres_tools()
+    report["phase"] = "gateway_catalog"
     status, catalog = http(ZEUS + "/models")
     if status != 200:
         raise RuntimeError("Zeus model catalog unavailable")
@@ -85,6 +87,7 @@ def main():
         work.chmod(0o700)
         pgdata, pgsocket = work / "pg", work / "s"
         pgsocket.mkdir(mode=0o700)
+        report["phase"] = "postgres_fixture"
         command([str(bindir / "initdb"), "-D", str(pgdata), "-U", "artex_fixture", "--auth-local=trust", "--auth-host=reject", "--no-locale", "--encoding=UTF8"])
         pg_started = False
         app = None
@@ -101,6 +104,7 @@ def main():
             with log.open("wb") as output:
                 app = subprocess.Popen([str(ROOT / "dist/artex-linux-amd64/artex"), "-addr", "127.0.0.1:" + str(port), "-proxy", "", "-data", str(work / "data")], cwd=ROOT, env=env, stdout=output, stderr=output)
             setup = None
+            report["phase"] = "application_readiness"
             for _ in range(120):
                 if app.poll() is not None:
                     text = log.read_text(errors="replace")
@@ -110,10 +114,16 @@ def main():
                 found = re.search(r"Setup token for the /setup page:\s*([a-f0-9]{32})", log.read_text(errors="replace"))
                 if found:
                     setup = found.group(1)
-                    break
+                    try:
+                        health_status, _ = http(base + "/api/health")
+                        if health_status == 200:
+                            break
+                    except urllib.error.URLError:
+                        pass
                 time.sleep(0.5)
-            if setup is None:
+            else:
                 raise RuntimeError("Artex did not finish initializing its disposable fixture")
+            report["phase"] = "fixture_authentication"
             status, auth = http(base + "/api/auth/init", {"password": secrets.token_urlsafe(32), "setup_token": setup})
             if status != 200 or not auth.get("token"):
                 raise RuntimeError("Disposable fixture setup failed")
@@ -126,6 +136,7 @@ def main():
             report["unauthenticated_api_status"] = status
             if status != 401:
                 raise RuntimeError("Protected API unexpectedly accepted an anonymous request")
+            report["phase"] = "model_tests"
             for model in MODELS:
                 for streaming in (True, False):
                     # Use Artex's own scoped Zeus key. Upstream provider keys
@@ -149,6 +160,7 @@ def main():
                     app.wait()
             if pg_started:
                 command([str(bindir / "pg_ctl"), "-D", str(pgdata), "-m", "fast", "-w", "stop"])
+    report["phase"] = "complete"
     return all(row["ok"] for row in report["models"]) and len(report["models"]) == 6
 
 passed = False
