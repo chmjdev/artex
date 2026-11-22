@@ -1,0 +1,54 @@
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+stages: [frontend, build]
+
+default:
+  tags: [kvm]
+  before_script:
+    - test "$CI_RUNNER_ID" = "3"
+    - test "$(uname -s)" = "Linux"
+    - test "$(uname -m)" = "x86_64"
+
+build:frontend:
+  stage: frontend
+  image: node:22-bookworm-slim
+  variables:
+    NEXT_TELEMETRY_DISABLED: "1"
+    npm_config_cache: "$CI_PROJECT_DIR/.cache/npm"
+  script:
+    - cd web
+    - npm ci --ignore-scripts
+    - npm run build:static
+    - cd ..
+    - mkdir -p server/webui/dist
+    - cp -a web/out/. server/webui/dist/
+  artifacts:
+    paths: [server/webui/dist/]
+    expire_in: 14 days
+
+build:linux:
+  stage: build
+  image: golang:1.26.11-bookworm
+  needs: [build:frontend]
+  variables:
+    GOTOOLCHAIN: local
+    GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+    GOMODCACHE: "$CI_PROJECT_DIR/.cache/gomod"
+    ARTEX_SKIP_FRONTEND: "1"
+    ARTEX_SKIP_NPM_CI: "1"
+    ARTEX_COMPRESS: "0"
+    ARTEX_PACKAGE: "1"
+    ARTEX_OUTPUT_DIR: dist
+    ARTEX_PACKAGE_DIR: dist
+  script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends zip file
+    - go version
+    - export ARTEX_BUILD_VERSION="binteca-${CI_COMMIT_SHORT_SHA}"
+    - bash ./build.sh --target linux/amd64
+    - sha256sum dist/artex-linux-amd64/artex > dist/BINARY-SHA256SUMS
+    - printf 'source=%s\npipeline=%s\njob=%s\nrunner=%s\nplatform=linux/amd64\n' "$CI_COMMIT_SHA" "$CI_PIPELINE_URL" "$CI_JOB_URL" "$CI_RUNNER_ID" > dist/build-receipt.txt
+  artifacts:
+    paths: [dist/]
+    expire_in: 30 days
