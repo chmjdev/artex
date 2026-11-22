@@ -13,11 +13,11 @@ default:
 
 build:frontend:
   stage: frontend
-  image: node:22-bookworm-slim
   variables:
     NEXT_TELEMETRY_DISABLED: "1"
     npm_config_cache: "$CI_PROJECT_DIR/.cache/npm"
   script:
+    - node --version
     - cd web
     - npm ci --ignore-scripts
     - npm run build:static
@@ -30,23 +30,25 @@ build:frontend:
 
 build:linux:
   stage: build
-  image: golang:1.26.11-bookworm
   needs: [build:frontend]
   variables:
-    GOTOOLCHAIN: local
+    GOTOOLCHAIN: go1.26.11
     GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
     GOMODCACHE: "$CI_PROJECT_DIR/.cache/gomod"
     ARTEX_SKIP_FRONTEND: "1"
     ARTEX_SKIP_NPM_CI: "1"
     ARTEX_COMPRESS: "0"
-    ARTEX_PACKAGE: "1"
+    ARTEX_PACKAGE: "0"
     ARTEX_OUTPUT_DIR: dist
     ARTEX_PACKAGE_DIR: dist
   script:
-    - apt-get update -qq && apt-get install -y --no-install-recommends zip file
     - go version
     - export ARTEX_BUILD_VERSION="binteca-${CI_COMMIT_SHORT_SHA}"
     - bash ./build.sh --target linux/amd64
+    - cp -a skills dist/artex-linux-amd64/
+    - cp start.sh config.example.json LICENSE README.md dist/artex-linux-amd64/
+    - tar -czf "dist/artex-${ARTEX_BUILD_VERSION}-linux-amd64.tar.gz" -C dist artex-linux-amd64
+    - sha256sum dist/*.tar.gz > dist/SHA256SUMS
     - sha256sum dist/artex-linux-amd64/artex > dist/BINARY-SHA256SUMS
     - printf 'source=%s\npipeline=%s\njob=%s\nrunner=%s\nplatform=linux/amd64\n' "$CI_COMMIT_SHA" "$CI_PIPELINE_URL" "$CI_JOB_URL" "$CI_RUNNER_ID" > dist/build-receipt.txt
   artifacts:
