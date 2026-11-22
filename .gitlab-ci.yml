@@ -2,7 +2,7 @@ workflow:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-stages: [frontend, build]
+stages: [frontend, build, smoke]
 
 default:
   tags: [kvm]
@@ -53,4 +53,14 @@ build:linux:
     - printf 'source=%s\npipeline=%s\njob=%s\nrunner=%s\nplatform=linux/amd64\n' "$CI_COMMIT_SHA" "$CI_PIPELINE_URL" "$CI_JOB_URL" "$CI_RUNNER_ID" > dist/build-receipt.txt
   artifacts:
     paths: [dist/]
+    expire_in: 30 days
+
+smoke:zeus:
+  stage: smoke
+  needs: [build:linux]
+  script:
+    - python3 ci/zeus-smoke.py
+  artifacts:
+    when: always
+    paths: [dist/model-smoke.json]
     expire_in: 30 days

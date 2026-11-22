@@ -64,5 +64,9 @@ backups/
 # posture probe raw output
 posture-runs/
 
+# Private disposable CI databases, credentials and runtime logs.
+/.runtime/
+/.cache/
+
 # benchmark runner output (one dir per run)
 benchmark-results/
