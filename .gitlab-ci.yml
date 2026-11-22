@@ -4,6 +4,11 @@ workflow:
 
 stages: [frontend, build, smoke]
 
+variables:
+  # Go's module cache contains read-only files. Retain only this project's
+  # cache between native-runner jobs; clean all other untracked outputs.
+  GIT_CLEAN_FLAGS: "-ffdx -e .cache/"
+
 default:
   tags: [kvm]
   before_script:
