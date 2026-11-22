@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import socket
 import subprocess
 import tempfile
@@ -44,10 +43,12 @@ def command(args, **kwargs):
     return subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
 
 def main():
-    bindir = Path(subprocess.check_output(["pg_config", "--bindir"], text=True).strip())
-    for tool in ("initdb", "pg_ctl", "createdb"):
-        if not (bindir / tool).is_file():
-            raise RuntimeError("Missing PostgreSQL fixture tool: " + tool)
+    # Debian's native server package has these tools without libpq-dev's
+    # optional pg_config command. Use the actual installed server directory.
+    candidates = sorted(Path("/usr/lib/postgresql").glob("*/bin"), reverse=True)
+    bindir = next((path for path in candidates if all((path / tool).is_file() for tool in ("initdb", "pg_ctl", "createdb"))), None)
+    if bindir is None:
+        raise RuntimeError("Native PostgreSQL fixture tools are unavailable")
     status, catalog = http(ZEUS + "/models")
     if status != 200:
         raise RuntimeError("Zeus model catalog unavailable")
@@ -80,6 +81,9 @@ def main():
             setup = None
             for _ in range(120):
                 if app.poll() is not None:
+                    text = log.read_text(errors="replace")
+                    text = re.sub(r"[a-fA-F0-9]{32,}", "[redacted]", text)
+                    report["startup_diagnostic"] = text[-3000:]
                     raise RuntimeError("Artex exited before startup")
                 found = re.search(r"Setup token for the /setup page:\s*([a-f0-9]{32})", log.read_text(errors="replace"))
                 if found:
@@ -94,6 +98,8 @@ def main():
             token = auth["token"]
             status, _ = http(base + "/api/health")
             report["health_status"] = status
+            if status != 200:
+                raise RuntimeError("Application health check failed")
             status, _ = http(base + "/api/llm")
             report["unauthenticated_api_status"] = status
             if status != 401:
