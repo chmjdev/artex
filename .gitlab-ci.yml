@@ -63,6 +63,8 @@ build:linux:
 smoke:zeus:
   stage: smoke
   needs: [build:linux]
+  environment:
+    name: artex-smoke
   script:
     - python3 ci/zeus-smoke.py
   artifacts:

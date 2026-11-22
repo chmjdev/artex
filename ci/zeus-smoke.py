@@ -67,6 +67,9 @@ def postgres_tools():
     return bindir
 
 def main():
+    api_key = os.environ.get("ARTEX_ZEUS_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Artex's own scoped Zeus credential is not delivered")
     bindir = postgres_tools()
     status, catalog = http(ZEUS + "/models")
     if status != 200:
@@ -125,12 +128,15 @@ def main():
                 raise RuntimeError("Protected API unexpectedly accepted an anonymous request")
             for model in MODELS:
                 for streaming in (True, False):
-                    # Ollama is Artex's keyless OpenAI-compatible transport.
-                    # Zeus retains its own provider credentials; none are copied.
-                    status, result = http(base + "/api/llm/test", {"provider": "ollama", "model": model, "base_url": ZEUS, "streaming": streaming}, token)
+                    # Use Artex's own scoped Zeus key. Upstream provider keys
+                    # stay at Zeus and are never delivered to this application.
+                    status, result = http(base + "/api/llm/test", {"provider": "openai", "model": model, "base_url": ZEUS, "api_key": api_key, "streaming": streaming}, token)
                     row = {"model": model, "streaming": streaming, "http_status": status, "ok": result.get("ok") is True, "latency_ms": result.get("latency_ms"), "reply": result.get("reply", "")}
                     if not row["ok"]:
-                        row["error"] = "Artex connection test failed; private runtime logs retained only for this job"
+                        message = str(result.get("error", "Artex connection test failed"))
+                        message = message.replace(api_key, "[redacted]")
+                        message = re.sub(r"Bearer\s+\S+|zeus_sk_[A-Za-z0-9_-]+", "[redacted]", message)
+                        row["error"] = message[:500]
                     report["models"].append(row)
                     print(json.dumps(row), flush=True)
         finally:

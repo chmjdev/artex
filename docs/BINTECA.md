@@ -28,10 +28,11 @@ The selected models are:
 - `experientiallabs/deepseek-v4.1-flash`
 - `orcarouter/orca/orcacyber-zero-1.5`
 
-Each model is tested in streaming and non-streaming mode. Artex's `ollama`
-adapter provides its keyless OpenAI-compatible transport; Zeus keeps its own
-provider credentials. The test copies no provider keys and refuses missing
-model IDs. Results are published as `dist/model-smoke.json`; private server
+Each model is tested in streaming and non-streaming mode. Artex uses the
+OpenAI-compatible adapter with its own model-scoped Zeus virtual key, vaulted
+as `apps/artex-prod-zeus-api-key` and delivered only to the `artex-smoke` CI
+environment. Zeus keeps its upstream provider credentials. The test refuses
+missing model IDs. Results are published as `dist/model-smoke.json`; private server
 logs, fixture credentials and the database are excluded from artifacts.
 
 This smoke run starts no assessment tasks and contacts no scan targets. A
