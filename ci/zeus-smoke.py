@@ -42,13 +42,32 @@ def http(url, body=None, token=None):
 def command(args, **kwargs):
     return subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
 
-def main():
-    # Debian's native server package has these tools without libpq-dev's
-    # optional pg_config command. Use the actual installed server directory.
+def postgres_tools():
     candidates = sorted(Path("/usr/lib/postgresql").glob("*/bin"), reverse=True)
-    bindir = next((path for path in candidates if all((path / tool).is_file() for tool in ("initdb", "pg_ctl", "createdb"))), None)
-    if bindir is None:
-        raise RuntimeError("Native PostgreSQL fixture tools are unavailable")
+    tools = ("initdb", "pg_ctl", "createdb")
+    installed = next((path for path in candidates if all((path / tool).is_file() for tool in tools)), None)
+    if installed:
+        return installed
+    # Unpack Debian's authenticated native packages into this project's cache.
+    # This runs without root and neither installs a package nor creates a host
+    # service. The server listens only on the disposable fixture's Unix socket.
+    cache = ROOT / ".cache/postgres-fixture"
+    cache.mkdir(parents=True, exist_ok=True)
+    prefix = cache / "root"
+    bindir = prefix / "usr/lib/postgresql/15/bin"
+    if not all((bindir / tool).is_file() for tool in tools):
+        command(["apt-get", "download", "postgresql-15", "postgresql-client-15", "libllvm14", "libz3-4", "libicu72", "libxml2", "libxslt1.1"], cwd=cache)
+        prefix.mkdir(exist_ok=True)
+        for package in cache.glob("*.deb"):
+            command(["dpkg-deb", "-x", str(package), str(prefix)])
+    os.environ["LD_LIBRARY_PATH"] = str(prefix / "usr/lib/x86_64-linux-gnu") + ":" + str(prefix / "lib/x86_64-linux-gnu")
+    if not all((bindir / tool).is_file() for tool in tools):
+        raise RuntimeError("Private PostgreSQL fixture extraction failed")
+    print("PostgreSQL fixture tools: project-private Debian packages", flush=True)
+    return bindir
+
+def main():
+    bindir = postgres_tools()
     status, catalog = http(ZEUS + "/models")
     if status != 200:
         raise RuntimeError("Zeus model catalog unavailable")
