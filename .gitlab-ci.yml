@@ -17,6 +17,10 @@ default:
     - test "$(uname -m)" = "x86_64"
 
 build:frontend:
+  rules:
+    - if: '$ARTEX_ESTATE_AUDIT == "1"'
+      when: never
+    - when: on_success
   stage: frontend
   variables:
     NEXT_TELEMETRY_DISABLED: "1"
@@ -34,6 +38,10 @@ build:frontend:
     expire_in: 14 days
 
 build:linux:
+  rules:
+    - if: '$ARTEX_ESTATE_AUDIT == "1"'
+      when: never
+    - when: on_success
   stage: build
   needs: [build:frontend]
   variables:
@@ -61,6 +69,10 @@ build:linux:
     expire_in: 30 days
 
 smoke:zeus:
+  rules:
+    - if: '$ARTEX_ESTATE_AUDIT == "1"'
+      when: never
+    - when: on_success
   stage: smoke
   needs: [build:linux]
   environment:
@@ -71,3 +83,24 @@ smoke:zeus:
     when: always
     paths: [dist/model-smoke.json]
     expire_in: 30 days
+
+estate:read-only:
+  stage: smoke
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $ARTEX_ESTATE_AUDIT == "1"'
+  environment:
+    name: artex-smoke
+    action: verify
+  variables:
+    GOTOOLCHAIN: go1.26.11
+    GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+    GOMODCACHE: "$CI_PROJECT_DIR/.cache/gomod"
+  script:
+    - mkdir -p dist
+    - go build -ldflags "-X main.version=$CI_COMMIT_SHA" -o dist/artex ./cmd/artex
+    - sha256sum dist/artex > dist/audit-binary.sha256
+    - printf '%s' "$ARTEX_ESTATE_INPUT" | dist/artex estate-audit > dist/estate-audit.json
+  artifacts:
+    when: always
+    paths: [dist/estate-audit.json, dist/audit-binary.sha256]
+    expire_in: 7 days

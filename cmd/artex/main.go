@@ -97,6 +97,13 @@ func flagWasSet(name string) bool {
 }
 
 func run() int {
+	if len(os.Args) == 2 && os.Args[1] == "estate-audit" {
+		if err := estateAudit(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
 	var (
 		addr    = flag.String("addr", "127.0.0.1:8787", "HTTP listen address")
 		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "runtime data directory: traffic index, task files, transcripts (default: data/ next to the executable)")
