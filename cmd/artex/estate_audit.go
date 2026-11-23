@@ -44,10 +44,14 @@ func checkCertificate(host string) certificateResult {
 		row.Status = "DNS lookup failed"
 		return row
 	}
+	row.Status = "no public address"
 	for _, addr := range ips {
 		ip := addr.IP
 		if !ip.IsGlobalUnicast() || ip.IsPrivate() {
 			continue
+		}
+		if row.Status == "no public address" {
+			row.Status = "connection failed"
 		}
 		dialer := tls.Dialer{Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}}
 		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), "443"))
@@ -87,7 +91,13 @@ func estateAudit(r io.Reader, w io.Writer) error {
 	if key == "" {
 		return errors.New("Artex Zeus key is required")
 	}
-	cfg := agent.ConfigFrom("openai", estateModel, "http://zeus.int/v1", key, "")
+	gateway := "http://zeus.int/v1"
+	if os.Getenv("CI_PROJECT_ID") == "84" && os.Getenv("CI_RUNNER_ID") == "3" {
+		// The lab01 Artex runner and the Zeus service share this host.
+		gateway = "http://127.0.0.1:3188/v1"
+	}
+	cfg := agent.ConfigFrom("openai", estateModel, gateway, key, "")
+	cfg.ReasoningEffort = "low"
 	prov, err := cfg.NewProvider()
 	if err != nil {
 		return errors.New("could not initialize Artex provider")
@@ -129,7 +139,16 @@ func estateAudit(r io.Reader, w io.Writer) error {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("Artex received no complete text review from Zeus (end reason %q)", stop)
+		cause := "incomplete reply"
+		if err != nil {
+			cause = "provider error"
+			for _, label := range []string{"401", "402", "403", "429", "502", "503", "timeout", "connection refused", "no such host", "empty completion"} {
+				if strings.Contains(strings.ToLower(err.Error()), label) {
+					cause += " " + label
+				}
+			}
+		}
+		return fmt.Errorf("Artex received no complete text review from Zeus (%s, end reason %q)", cause, stop)
 	}
 	return nil
 }
