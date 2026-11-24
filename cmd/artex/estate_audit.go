@@ -91,7 +91,7 @@ func estateAudit(r io.Reader, w io.Writer) error {
 	if key == "" {
 		return errors.New("Artex Zeus key is required")
 	}
-	gateway := "http://zeus.int/v1"
+	gateway := "https://zeus.int/v1"
 	if os.Getenv("CI_PROJECT_ID") == "84" && os.Getenv("CI_RUNNER_ID") == "3" {
 		// The lab01 Artex runner and the Zeus service share this host.
 		gateway = "http://127.0.0.1:3188/v1"
