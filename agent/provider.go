@@ -33,10 +33,11 @@ import (
 
 // Config describes the LLM backend resolved from the environment.
 type Config struct {
-	Format  llm.Format
-	BaseURL string
-	APIKey  string
-	Model   string
+	Format      llm.Format
+	BaseURL     string
+	APIKey      string
+	Model       string
+	ZeusProfile string
 	// Proxy routes all LLM requests through the given proxy URL (http/https/socks5,
 	// optionally with user:pass@ credentials). Empty means direct — it does NOT
 	// fall back to the standard *_PROXY environment variables.
@@ -217,22 +218,56 @@ func compactionConfig(windowTokens int) *compaction.Config {
 	return &compaction.Config{ContextWindow: windowTokens}
 }
 
+func normalizeZeusBaseURL(raw string) string {
+	b := strings.TrimRight(strings.TrimSuffix(strings.TrimSpace(raw), "/chat/completions"), "/")
+	if b == "" {
+		return "http://127.0.0.1:3188/v1"
+	}
+	if !strings.HasSuffix(b, "/v1") {
+		b += "/v1"
+	}
+	return b
+}
+
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "127.0.0.1" || host == "localhost"
+}
+
+func defaultZeusProfile() string {
+	if p := strings.TrimSpace(os.Getenv("ARTEX_ZEUS_PROFILE")); p != "" {
+		return p
+	}
+	return "artex-pentest"
+}
+
 // FromEnv resolves the LLM provider config:
 //
-//	ARTEX_LLM_PROVIDER = anthropic|openai|openai-responses|ollama (default: inferred from keys)
-//	ARTEX_LLM_MODEL    = model id        (default: per provider)
-//	ARTEX_LLM_BASE_URL = endpoint        (optional; ollama defaults to localhost:11434/v1)
-//	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
-//	ANTHROPIC_API_KEY / OPENAI_API_KEY         = credentials (unused for ollama)
+//	ARTEX_LLM_PROVIDER   = zeus|anthropic|openai|openai-responses|ollama (default: inferred from keys, Zeus first)
+//	ARTEX_ZEUS_BASE_URL  = Zeus endpoint (default: http://127.0.0.1:3188/v1)
+//	ARTEX_ZEUS_API_KEY   = Zeus virtual key (optional on loopback)
+//	ARTEX_ZEUS_PROFILE   = Zeus profile header (default: artex-pentest)
+//	ARTEX_LLM_MODEL      = model id        (default: per provider; zeus/profile/<profile> for Zeus)
+//	ARTEX_LLM_BASE_URL   = endpoint        (optional; ollama defaults to localhost:11434/v1)
+//	ARTEX_LLM_PROXY      = proxy URL       (optional; http/https/socks5)
+//	ANTHROPIC_API_KEY / OPENAI_API_KEY = credentials (unused for ollama)
 func FromEnv() (Config, bool) {
 	// Case- and space-insensitive: "Ollama" used to miss every case below and
 	// fall through to anthropic, sending ANTHROPIC_API_KEY to the Ollama base URL.
 	prov := strings.ToLower(strings.TrimSpace(os.Getenv("ARTEX_LLM_PROVIDER")))
+	zeusKey := strings.TrimSpace(os.Getenv("ARTEX_ZEUS_API_KEY"))
+	zeusURL := strings.TrimSpace(os.Getenv("ARTEX_ZEUS_BASE_URL"))
 	anthKey := os.Getenv("ANTHROPIC_API_KEY")
 	oaiKey := os.Getenv("OPENAI_API_KEY")
 
 	if prov == "" {
 		switch {
+		case zeusKey != "" || zeusURL != "":
+			prov = "zeus"
 		case anthKey != "":
 			prov = "anthropic"
 		case oaiKey != "":
@@ -251,9 +286,30 @@ func FromEnv() (Config, bool) {
 		Stream: !isFalsy(os.Getenv("ARTEX_LLM_STREAM")),
 	}
 	switch prov {
+	case "zeus":
+		c.Format = llm.FormatOpenAI
+		profile := defaultZeusProfile()
+		c.ZeusProfile = profile
+		if strings.TrimSpace(c.BaseURL) == "" {
+			c.BaseURL = zeusURL
+		}
+		c.BaseURL = normalizeZeusBaseURL(c.BaseURL)
+		c.APIKey = zeusKey
+		if c.APIKey == "" {
+			c.APIKey = oaiKey
+		}
+		if c.APIKey == "" && isLoopbackURL(c.BaseURL) {
+			c.APIKey = "zeus-local"
+		}
+		if c.Model == "" {
+			c.Model = "zeus/profile/" + profile
+		}
 	case "openai":
 		c.Format = llm.FormatOpenAI
 		c.APIKey = oaiKey
+		if strings.Contains(c.BaseURL, "zeus.int") || strings.Contains(c.BaseURL, ":3188") || strings.HasPrefix(c.Model, "zeus/") {
+			c.ZeusProfile = defaultZeusProfile()
+		}
 		if c.Model == "" {
 			c.Model = "gpt-4o"
 		}
@@ -299,11 +355,25 @@ func ConfigFrom(provider, model, baseURL, apiKey, proxy string) Config {
 		Proxy:   strings.TrimSpace(proxy),
 		Stream:  true, // streaming by default; the caller overrides per profile
 	}
-	switch strings.TrimSpace(provider) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "zeus":
+		c.Format = llm.FormatOpenAI
+		profile := defaultZeusProfile()
+		c.ZeusProfile = profile
+		c.BaseURL = normalizeZeusBaseURL(c.BaseURL)
+		if c.APIKey == "" && isLoopbackURL(c.BaseURL) {
+			c.APIKey = "zeus-local"
+		}
+		if c.Model == "" {
+			c.Model = "zeus/profile/" + profile
+		}
 	case "openai":
 		c.Format = llm.FormatOpenAI
 		// provider appends "/chat/completions"; tolerate a full endpoint URL.
 		c.BaseURL = strings.TrimRight(strings.TrimSuffix(c.BaseURL, "/chat/completions"), "/")
+		if strings.Contains(c.BaseURL, "zeus.int") || strings.Contains(c.BaseURL, ":3188") || strings.HasPrefix(c.Model, "zeus/") {
+			c.ZeusProfile = defaultZeusProfile()
+		}
 		if c.Model == "" {
 			c.Model = "gpt-4o"
 		}
@@ -363,7 +433,7 @@ func (c Config) Provider() string {
 // limiter lives on the single provider instance — so planner + all workers +
 // main agent (which share this provider) are bounded by one shared rate limit.
 func (c Config) NewProvider() (llm.Provider, error) {
-	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey, c.UserAgent)
+	client, err := quotaAwareHTTPClientWithZeus(c.Proxy, c.SessionHeaderKey, c.UserAgent, c.ZeusProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -465,6 +535,8 @@ type quotaAwareTransport struct {
 	// userAgent, when non-empty, is set as the User-Agent header on every request.
 	// Empty leaves the default UA untouched. See Config.UserAgent.
 	userAgent string
+	// zeusProfile, when non-empty, injects X-Zeus-Profile on outbound requests.
+	zeusProfile string
 }
 
 func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -481,6 +553,9 @@ func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// underlying transport's default UA exactly as before.
 	if t.userAgent != "" {
 		req.Header.Set("User-Agent", t.userAgent)
+	}
+	if t.zeusProfile != "" && req.Header.Get("X-Zeus-Profile") == "" {
+		req.Header.Set("X-Zeus-Profile", t.zeusProfile)
 	}
 	// When LLM recording is on, the Recorder puts a Capture on the context so the
 	// raw wire bodies can be persisted. This is the only layer that still sees
@@ -535,6 +610,10 @@ func requestBodySnapshot(req *http.Request) string {
 }
 
 func quotaAwareHTTPClient(proxy, sessionHeaderKey, userAgent string) (*http.Client, error) {
+	return quotaAwareHTTPClientWithZeus(proxy, sessionHeaderKey, userAgent, "")
+}
+
+func quotaAwareHTTPClientWithZeus(proxy, sessionHeaderKey, userAgent, zeusProfile string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	proxy = strings.TrimSpace(proxy)
 	if proxy == "" {
@@ -553,7 +632,7 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey, userAgent string) (*http.Clie
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
-	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey), userAgent: strings.TrimSpace(userAgent)}}, nil
+	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey), userAgent: strings.TrimSpace(userAgent), zeusProfile: strings.TrimSpace(zeusProfile)}}, nil
 }
 
 // MaxUserAgentLen bounds a custom User-Agent value. Generous for real UA strings

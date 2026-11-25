@@ -18,19 +18,22 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-ZEUS = os.environ.get("ARTEX_SMOKE_ZEUS_URL", "http://127.0.0.1:3188/v1").rstrip("/")
+ZEUS = os.environ.get("ARTEX_ZEUS_BASE_URL", os.environ.get("ARTEX_SMOKE_ZEUS_URL", "http://127.0.0.1:3188/v1")).rstrip("/")
+PROFILE = os.environ.get("ARTEX_ZEUS_PROFILE", "artex-pentest").strip() or "artex-pentest"
 MODELS = [
+    f"zeus/profile/{PROFILE}",
     "experientiallabs/deepseek-v4.1-flash-uncensored",
-    "experientiallabs/deepseek-v4.1-flash",
     "orcarouter/orca/orcacyber-zero-1.5",
 ]
-report = {"source": os.environ.get("CI_COMMIT_SHA"), "gateway": "zeus.int", "models": [], "scan_started": False}
+report = {"source": os.environ.get("CI_COMMIT_SHA"), "gateway": "zeus.int", "profile": PROFILE, "models": [], "scan_started": False}
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-def http(url, body=None, token=None):
-    headers = {"Content-Type": "application/json"}
+def http(url, body=None, token=None, extra_headers=None):
+    headers = {"Content-Type": "application/json", "X-Zeus-Profile": PROFILE}
     if token:
         headers["Authorization"] = "Bearer " + token
+    if extra_headers:
+        headers.update(extra_headers)
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, headers=headers)
     try:
@@ -141,7 +144,7 @@ def main():
                 for streaming in (True, False):
                     # Use Artex's own scoped Zeus key. Upstream provider keys
                     # stay at Zeus and are never delivered to this application.
-                    status, result = http(base + "/api/llm/test", {"provider": "openai", "model": model, "base_url": ZEUS, "api_key": api_key, "streaming": streaming}, token)
+                    status, result = http(base + "/api/llm/test", {"provider": "zeus", "model": model, "base_url": ZEUS, "api_key": api_key, "streaming": streaming}, token)
                     row = {"model": model, "streaming": streaming, "http_status": status, "ok": result.get("ok") is True, "latency_ms": result.get("latency_ms"), "reply": result.get("reply", "")}
                     if not row["ok"]:
                         message = str(result.get("error", "Artex connection test failed"))

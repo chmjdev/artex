@@ -20,7 +20,7 @@ import (
 // estateAudit runs before server startup. Only the fixed TLS collector has
 // target access. The provider receives counts in a single completion, with
 // no task, tool definitions, or executor.
-const estateModel = "experientiallabs/deepseek-v4.1-flash-uncensored"
+const defaultEstateProfile = "artex-pentest"
 
 type estateCounts struct {
 	Observed                                                         string
@@ -91,12 +91,21 @@ func estateAudit(r io.Reader, w io.Writer) error {
 	if key == "" {
 		return errors.New("Artex Zeus key is required")
 	}
-	gateway := "https://zeus.int/v1"
-	if os.Getenv("CI_PROJECT_ID") == "84" && os.Getenv("CI_RUNNER_ID") == "3" {
-		// The lab01 Artex runner and the Zeus service share this host.
-		gateway = "http://127.0.0.1:3188/v1"
+	profile := strings.TrimSpace(os.Getenv("ARTEX_ZEUS_PROFILE"))
+	if profile == "" {
+		profile = defaultEstateProfile
 	}
-	cfg := agent.ConfigFrom("openai", estateModel, gateway, key, "")
+	estateModel := "zeus/profile/" + profile
+	gateway := strings.TrimSpace(os.Getenv("ARTEX_ZEUS_BASE_URL"))
+	if gateway == "" {
+		gateway = "https://zeus.int/v1"
+		if os.Getenv("CI_PROJECT_ID") == "84" && os.Getenv("CI_RUNNER_ID") == "3" {
+			// The lab01 Artex runner and the Zeus service share this host.
+			gateway = "http://127.0.0.1:3188/v1"
+		}
+	}
+	cfg := agent.ConfigFrom("zeus", estateModel, gateway, key, "")
+	cfg.ZeusProfile = profile
 	cfg.ReasoningEffort = "low"
 	prov, err := cfg.NewProvider()
 	if err != nil {
